@@ -8,6 +8,21 @@
   </a>
 </p>
 
+> [!CAUTION]
+> **⚠️ v0.0.8 已撤回 (2026-08-18) — 请勿安装 / 请立即卸载**
+>
+> v0.0.8 版本（Hide Rule System / 设备模拟 / WebUI 分支）被发现会在至少一台设备上
+> **破坏模拟存储 (sdcard) 的 FUSE 守护进程**：安装模块并重启后，vold 反复无法启动
+> sdcard FUSE daemon（`Failed to start FUSE`，exit 234），`/sdcard` 不可访问
+> （`Transport endpoint is not connected`）。底层数据在 `/data/media/0` 中**不会丢失**，
+> 但存储挂载会一直失败，直到移除模块并重启设备。
+>
+> 该 release 与 tag 已删除。**请勿安装 v0.0.8。** 若已安装：移除模块
+> （`rm -rf /data/adb/modules/zygisk_nohello /data/adb/nohello
+> /data/adb/post-fs-data.d/.nohello_cleanup.sh`）并重启——存储会完全恢复，数据完好。
+>
+> 根因调查中。上游 v0.0.7 不受影响。
+
 > [!NOTE]
 > 本模块目前专注于向 App 隐藏 root 与 Zygisk 痕迹。
 > 后续更新会逐步补充更多功能与修复。

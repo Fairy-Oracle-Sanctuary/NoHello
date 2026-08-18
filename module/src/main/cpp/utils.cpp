@@ -159,53 +159,61 @@ static ssize_t process_vm_writev(pid_t pid,
 }
 
 bool nscg2(pid_t pid) {
+    // We must enter the target's mount namespace at minimum; the cgroup
+    // namespace is a best-effort extra. setns(2) into a cgroup namespace
+    // requires the caller to be in a compatible cgroup hierarchy (cgroup v1
+    // has no single ns, and Android <10 devices may lack it entirely), so a
+    // cgroup setns failure must NOT abort the whole unmount operation — the
+    // mount ns switch alone is sufficient for unmounting to work.
+    bool mnt_ok = false;
+
     int pidfd = pidfd_open(pid, 0);
     if (pidfd != -1) {
-    	// https://man7.org/linux/man-pages/man2/setns.2.html
+        // https://man7.org/linux/man-pages/man2/setns.2.html
         int res = setns(pidfd, CLONE_NEWNS | CLONE_NEWCGROUP);
         close(pidfd);
-        if (res) {
-            LOGE("setns(pidfd_open(%d, 0) -> %d (closed), 0): %s", pid, pidfd, strerror(errno));
-            goto fallback;
+        if (res == 0) {
+            return true;
         }
-        return true;
+        LOGW("setns(pidfd_open(%d, 0), CLONE_NEWNS|CLONE_NEWCGROUP): %s; falling back to per-ns setns", pid, strerror(errno));
     } else {
-        LOGE("pidfd_open(%d): %s", pid, strerror(errno));
+        LOGW("pidfd_open(%d): %s; falling back to /proc/%d/ns/*", pid, strerror(errno), pid);
     }
-fallback:
+
     {
         std::string mntPath = "/proc/" + std::to_string(pid) + "/ns/mnt";
         int mntfd_fallback = open(mntPath.c_str(), O_RDONLY);
         if (mntfd_fallback != -1) {
             int res = setns(mntfd_fallback, CLONE_NEWNS);
+            close(mntfd_fallback);
             if (res) {
                 LOGE("setns(open(\"%s\") -> %d, CLONE_NEWNS): %s", mntPath.c_str(), mntfd_fallback, strerror(errno));
-                close(mntfd_fallback);
                 return false;
             }
-            close(mntfd_fallback);
+            mnt_ok = true;
         } else {
             LOGE("open(\"%s\"): %s", mntPath.c_str(), strerror(errno));
             return false;
         }
     }
+
     {
         std::string cgPath = "/proc/" + std::to_string(pid) + "/ns/cgroup";
         int cgfd_fallback = open(cgPath.c_str(), O_RDONLY);
         if (cgfd_fallback != -1) {
             int res = setns(cgfd_fallback, CLONE_NEWCGROUP);
-            if (res) {
-                LOGE("setns(open(\"%s\") -> %d, CLONE_NEWCGROUP): %s", cgPath.c_str(), cgfd_fallback, strerror(errno));
-                close(cgfd_fallback);
-                return false;
-            }
             close(cgfd_fallback);
+            if (res) {
+                // Mount ns is already switched; keep going — unmount only needs mnt ns.
+                LOGW("setns(open(\"%s\") -> %d, CLONE_NEWCGROUP): %s; continuing with mount ns only", cgPath.c_str(), cgfd_fallback, strerror(errno));
+            }
         } else {
-            LOGE("open(\"%s\"): %s", cgPath.c_str(), strerror(errno));
-            return false;
+            // cgroup ns may simply not exist on this kernel/cgroup version.
+            LOGW("open(\"%s\"): %s; continuing with mount ns only", cgPath.c_str(), strerror(errno));
         }
     }
-    return true;
+
+    return mnt_ok;
 }
 
 

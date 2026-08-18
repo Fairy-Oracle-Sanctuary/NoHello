@@ -286,8 +286,130 @@ static void remount(const std::vector<MountInfo>& mounts) {
 
 int (*ar_unshare)(int) = nullptr;
 
+// ---------------------------------------------------------------------------
+// Hide Rule System
+// ---------------------------------------------------------------------------
+// TGPA/ACE-style anti-cheats probe *child paths* of well-known directories
+// (e.g. /sys/module/module_00, /data/local/tmp/.studio, /dev/pts/0) to detect
+// root frameworks, debuggers and cheat tooling. Covering the parent with an
+// empty tmpfs makes every child path fail with ENOENT, which the probes read
+// as "not present". The parent itself still resolves (avoids tripping
+// "directory vanished" heuristics).
+//
+// Defaults cover the two highest-value surfaces observed in real-world
+// runtime traces (KernelSU kernel-module enumeration + /data/local/tmp tool
+// probing). Additional paths can be added via /data/adb/nohello/hide, one per
+// line, '#' comments allowed.
+// ---------------------------------------------------------------------------
+static const std::vector<std::pair<std::string, std::string>> defaultHidePaths = {
+    // path, SELinux context (best-effort; falls back to a per-path safe context)
+    //
+    // Only /sys/module is on by default:
+    //  - /data/local/tmp covering is pointless for app-context probes
+    //    (untrusted_app can't traverse /data/local anyway — EACCES either way)
+    //    and adds a mounts-visible entry.
+    //  - /sys/class/kgsl covering can break the game's own GPU monitoring
+    //    (UE reads kgsl nodes for perf/thermal); add it manually via the hide
+    //    file only when spoofing a MediaTek donor.
+    {"/sys/module", "u:object_r:sysfs:s0"},
+};
+
+// Per-path safe fallback context used when the configured context mount fails:
+// a bare tmpfs inherits a generic label that untrusted_app can't traverse,
+// which would turn a clean ENOENT into an EACCES — exactly the "parent dir
+// anomaly" heuristic we are trying to avoid. sysfs-paths get sysfs, data
+// paths get shell_data_file (matches the original directories).
+static std::string fallbackContextFor(const std::string &path) {
+    if (path.rfind("/sys", 0) == 0)
+        return "u:object_r:sysfs:s0";
+    if (path.rfind("/data", 0) == 0)
+        return "u:object_r:shell_data_file:s0";
+    return "";
+}
+
+static bool looksLikeValidContext(const std::string &ctx) {
+    // u:object_r:<type>[:s0[=name]] — require at least the prefix and a colon-terminated type
+    return ctx.rfind("u:object_r:", 0) == 0 && ctx.find(':') != std::string::npos;
+}
+
+static std::vector<std::pair<std::string, std::string>> getHidePaths() {
+    std::vector<std::pair<std::string, std::string>> paths = defaultHidePaths;
+    std::ifstream f("/data/adb/nohello/hide");
+    if (!f.is_open()) {
+        if (access("/data/adb/nohello/hide", F_OK) == 0)
+            LOGW("hide: /data/adb/nohello/hide exists but could not be opened; using defaults only");
+        return paths;
+    }
+    std::string line;
+    while (std::getline(f, line)) {
+        // strip comments
+        auto hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        // tokenize on any whitespace (space or tab), trim CR for CRLF files
+        std::istringstream iss(line);
+        std::string path, token;
+        iss >> path;
+        if (path.empty()) continue;
+        if (!path.empty() && path.back() == '\r') path.pop_back();
+        if (path.empty() || path == "/" || path[0] != '/') {
+            LOGW("hide: ignoring invalid path '%s'", path.c_str());
+            continue;
+        }
+        std::string ctx;
+        while (iss >> token) {
+            if (token.rfind("context=", 0) == 0) {
+                ctx = token.substr(8);
+                if (!ctx.empty() && ctx.back() == '\r') ctx.pop_back();
+                if (!looksLikeValidContext(ctx)) {
+                    LOGW("hide: ignoring invalid context '%s' for %s", ctx.c_str(), path.c_str());
+                    ctx.clear();
+                }
+            } else {
+                LOGW("hide: ignoring unknown token '%s' on line for %s", token.c_str(), path.c_str());
+            }
+        }
+        bool dup = false;
+        for (const auto &[p, c] : paths)
+            if (p == path) { dup = true; break; }
+        if (dup) continue;
+        paths.emplace_back(path, ctx);
+    }
+    return paths;
+}
+
+static void mountHidePaths() {
+    for (const auto &[path, ctx] : getHidePaths()) {
+        if (access(path.c_str(), F_OK) != 0) {
+            LOGW("#[zygisk::preSpecialize] hide: %s does not exist, skipping", path.c_str());
+            continue;
+        }
+        // Best-effort: try with the requested SELinux context first, then a
+        // per-path safe context (see fallbackContextFor), never a bare tmpfs
+        // whose label would make child probes EACCES instead of ENOENT.
+        unsigned long flags = MS_NOSUID | MS_NODEV | MS_NOEXEC;
+        std::string fallback = fallbackContextFor(path);
+        int res = -1;
+        if (!ctx.empty())
+            res = mount("tmpfs", path.c_str(), "tmpfs", flags, ("context=" + ctx).c_str());
+        if (res != 0 && !fallback.empty() && fallback != ctx)
+            res = mount("tmpfs", path.c_str(), "tmpfs", flags, ("context=" + fallback).c_str());
+        if (res != 0)
+            LOGW("#[zygisk::preSpecialize] hide: failed to cover %s (context='%s' fallback='%s'): %s",
+                 path.c_str(), ctx.c_str(), fallback.c_str(), strerror(errno));
+        else
+            LOGD("#[zygisk::preSpecialize] hide: covered %s with empty tmpfs", path.c_str());
+    }
+}
+
 static int reshare(int flags) {
     errno = 0;
+    if (ar_unshare == nullptr) {
+        // PLT hook registration failed (or was never committed); pretend the
+        // call succeeded so apps probing unshare(CLONE_NEWNS) can't tell that
+        // the environment is special.
+        LOGW("ar_unshare is null, faking successful unshare(%d)", flags);
+        return 0;
+    }
     return ar_unshare(flags & ~(CLONE_NEWNS | CLONE_NEWCGROUP));
 }
 
@@ -421,6 +543,13 @@ private:
 
 			int res = unshare(CLONE_NEWNS | CLONE_NEWCGROUP);
 			if (res != 0) {
+				// CLONE_NEWCGROUP may be unsupported (cgroup v1, older kernels,
+				// or seccomp restrictions). Degrade gracefully to mount ns only
+				// instead of giving up on hiding entirely.
+				LOGW("#[zygisk::preSpecialize] unshare(CLONE_NEWNS|CLONE_NEWCGROUP): %s; retrying with CLONE_NEWNS only", strerror(errno));
+				res = unshare(CLONE_NEWNS);
+			}
+			if (res != 0) {
 				LOGE("#[zygisk::preSpecialize] unshare: %s", strerror(errno));
 				// There's nothing we can do except returning
 				close(cfd);
@@ -471,6 +600,12 @@ private:
 				unmount(mountRules, getMountInfo()); // Unmount in current (zygote) namespace as fallback
 			}
 
+			// Hide Rule System: cover detection surfaces with empty tmpfs so
+			// anti-cheat probes of child paths (e.g. /sys/module/module_00,
+			// /data/local/tmp/.studio) fail with ENOENT. Runs in the app's
+			// freshly unshared mount namespace regardless of companion outcome.
+			mountHidePaths();
+
 			// Sanitize FDs after companion communication and potential mount changes
 			for (auto &[fdi, shouldDetach] : fdSanitizeList) {
 				LOGD("#[zygisk::preSpecialize]: Sanitizing FD %d (path: %s, socket: %d), detach: %d",
@@ -519,8 +654,9 @@ static void NoRoot(int fd) {
 			return MODULE_CONFLICT;
 		if (fs::exists("/data/adb/modules/treat_wheel") && !fs::exists("/data/adb/modules/treat_wheel/disable"))
 			return MODULE_CONFLICT;
-		if (fs::exists("/data/adb/modules/susfs4ksu") && !fs::exists("/data/adb/modules/susfs4ksu/disable"))
-			return MODULE_CONFLICT;
+		// susfs4ksu is intentionally NOT a conflict: it provides kernel-level
+		// path hiding (sus_path) which is complementary to Nohello's userland
+		// unmount + tmpfs covering. Both can coexist.
 		return NORMAL;
 	}();
 

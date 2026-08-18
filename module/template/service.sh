@@ -48,3 +48,38 @@ check_reset_prop "ro.boot.realme.lockstate" "1"
 contains_reset_prop "ro.bootmode" "recovery" "unknown"
 contains_reset_prop "ro.boot.bootmode" "recovery" "unknown"
 contains_reset_prop "vendor.boot.bootmode" "recovery" "unknown"
+
+# ---------------------------------------------------------------------------
+# Device-spoof: apply donor device properties (props.conf)
+# ---------------------------------------------------------------------------
+# props.conf holds key=value lines collected from a real donor device
+# (e.g. Huawei WKG-AN00). The *editable* copy lives at
+# /data/adb/nohello/props.conf (managed by the WebUI); the module directory
+# copy is only the factory default fallback. When the enable marker exists
+# (/data/adb/nohello/props_enabled), each key is applied with resetprop.
+# ro.* properties can be changed by resetprop at runtime; note that
+# Build.VERSION.SDK_INT / RELEASE are compile-time constants in the framework
+# and cannot be spoofed — keep those out of the config (see shipped props.conf).
+# ---------------------------------------------------------------------------
+NOHELLO_DIR="/data/adb/nohello"
+if [ -f "$NOHELLO_DIR/props.conf" ]; then
+  PROPS_CONF="$NOHELLO_DIR/props.conf"
+elif [ -f "$MODDIR/props.conf" ]; then
+  PROPS_CONF="$MODDIR/props.conf"
+else
+  PROPS_CONF=""
+fi
+
+if [ -n "$PROPS_CONF" ]; then
+  if [ -f "$NOHELLO_DIR/props_enabled" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        ''|\#*) continue ;;
+      esac
+      key="${line%%=*}"
+      val="${line#*=}"
+      [ -n "$key" ] || continue
+      resetprop "$key" "$val"
+    done < "$PROPS_CONF"
+  fi
+fi

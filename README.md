@@ -52,6 +52,87 @@ You can set the working mode to **whitelist** (instead of the default **blacklis
 
 This can be solved if you make NoHello evaluates Mount Rule System per boot/companion instance, by creating an empty regular file `/data/adb/nohello/umount_persist`/`data/adb/nohello/umount_persists`
 
+## Hide Rule System
+
+**Since version 0.0.7-fos**, NoHello introduces **Hide Rule System** to counter anti-cheat detections that probe *child paths* of well-known directories (e.g. `/sys/module/module_00`, `/data/local/tmp/.studio`, `/dev/pts/0`) for root frameworks, debuggers and cheat tooling.
+
+For each configured path, NoHello covers the directory with an **empty tmpfs** inside the target app's mount namespace, so child-path probes fail (ENOENT for sysfs paths; EACCES for `/data/local/tmp` — same as a clean device) while the directory itself still resolves — avoiding "directory vanished" heuristics.
+
+> [!WARNING]
+> **Detection-surface tradeoff**: covering a directory with tmpfs adds non-standard mount entries to the app's `/proc/self/mounts` (e.g. `tmpfs /sys/module`), changes `st_dev` vs its parent, and makes the covered directory empty (a real device's `/sys/module` always has entries). In the observed TGPA/ACE runtime traces (access/stat child-path probing) this is a net win, but any anti-cheat that parses mountinfo or cross-checks `st_dev` will see the cover. This is the fundamental limitation of userland-only hiding (the reason susfs exists); test on the target game before relying on it.
+
+> [!IMPORTANT]
+> **Do NOT add `/dev/pts` to the hide file** — covering the devpts mount point breaks `openpty()`/pts allocation in apps. TGPA's PTY probe (`stat /dev/pts/0..9`) is best handled by keeping the environment free of active root shells on the target device.
+
+### Default coverage (built-in)
+
+| Path | Counter |
+|------|---------|
+| `/sys/module` | KernelSU / kernel-module enumeration (`module_00..99`, `rwProcMem`, ...) |
+
+> `/data/local/tmp` is intentionally **not** covered by default: `untrusted_app` cannot traverse `/data/local` anyway (EACCES either way), so the cover adds a mounts-visible entry with no benefit. `/sys/class/kgsl` is also opt-in — covering it can break the game's own GPU monitoring (Unreal reads kgsl nodes for perf/thermal). Add them via the hide file only if needed.
+
+### Customization
+
+Additional paths can be added via `/data/adb/nohello/hide`, one per line (`#` comments allowed), optionally with a per-line SELinux context:
+
+```
+# cover PTY detection
+/dev/pts
+
+# with explicit context
+/sys/module context=u:object_r:sysfs:s0
+```
+
+Mounting is best-effort: if the `context=` mount fails, NoHello retries with a plain tmpfs.
+
+## Device Spoofing (property service)
+
+**Since version 0.0.7-fos**, NoHello can impersonate a donor device (e.g. a non-rooted Huawei phone) to anti-cheats that fingerprint the device.
+
+### How it works
+
+A single channel driven by `props.conf`:
+
+| Channel | Mechanism | Scope | Default |
+|---------|-----------|-------|---------|
+| **Property service** | `resetprop` applies each `key=value` to the global property service (`__system_property_get` / `getprop`) | System-wide | Off, opt-in via `/data/adb/nohello/props_enabled` |
+
+The **editable** config lives at `/data/adb/nohello/props.conf` (managed by the WebUI); the module directory copy (`$MODDIR/props.conf`) is only the factory-default fallback read at boot. `service.sh` re-applies on every boot while `props_enabled` exists.
+
+> [!IMPORTANT]
+> Earlier designs also bind-mounted a spoofed build.prop / cpuinfo into the app's mount namespace. That approach was **dropped**: those mounts are visible in the app's `/proc/self/mounts` with `/data/adb/...` sources — exactly the fingerprint this module's own unmount logic treats as suspicious — and TGPA's observed traces never read build.prop files. Property-service spoofing via resetprop is the only channel.
+
+### What to spoof (and what NOT to)
+
+| Do spoof | Don't spoof | Why |
+|----------|-------------|-----|
+| `ro.product.brand/model/device/name/manufacturer` | `ro.hardware` / `ro.board.platform` | SoC props contradict `GL_RENDERER` (Adreno), `/sys/devices/soc0`, `/proc/device-tree` — a stronger red flag than not spoofing |
+| `ro.build.fingerprint` (main, release-keys) | `ro.build.version.sdk` / `release` | `Build.VERSION.SDK_INT/RELEASE` are compile-time constants in the framework; resetprop can't change them → `getprop` vs `Build.*` contradiction |
+| `ro.debuggable` / `ro.secure` / `ro.adb.secure` | sub-fingerprints (`ro.system.build.*`, `ro.vendor.build.*`) | Donor test firmware carries `dev-keys`/`eng.root` — the classic root fingerprint; the main fingerprint is already release-keys |
+
+The shipped default profile is a **Huawei WKG-AN00 (EMUI 13 / HarmonyOS 3, Android 10)** — already cleaned per the above rules.
+
+### Collecting a donor device profile
+
+On the donor (non-rooted) phone, dump all properties:
+
+```sh
+adb shell getprop > donor_getprop.txt
+```
+
+Then convert the interesting `ro.*` keys into `props.conf` (`key=value` lines, `#` comments allowed) and push it to `/data/adb/nohello/props.conf`, applying the cleaning rules above.
+
+### WebUI
+
+KernelSU (and KernelSU Next / forks) show the module's built-in WebUI in the manager — open the NoHello module page and tap the settings icon. It provides:
+
+- 📱 **Device spoofing**: toggle the property-service channel, edit `props.conf`, save & re-apply, restore factory defaults
+- 🛡 **Hide paths**: view/edit `/data/adb/nohello/hide`
+- ⚙️ **Rules & status**: unmount count, whitelist / umount_persist toggles, Mount Rule System editor, uninstall config
+
+> The WebUI uses the official `kernelsu` JS library (`exec()` API) and lives in `webroot/` per the [KernelSU module WebUI spec](https://kernelsu.org/zh_CN/guide/module-webui.html). File writes are base64-encoded through the shell to avoid injection.
+
 ## Mount Rule System
 
 **Since version 0.0.5**, NoHello introduces **Mount Rule System**.</br>

@@ -99,5 +99,17 @@ if [ ! -e "/data/adb/nohello/umount" ]; then
   extract "$ZIPFILE" "umount" "/data/adb/nohello"
   touch "/data/adb/nohello/umount_persist"
 fi
+if [ ! -e "/data/adb/nohello/hide" ]; then
+  extract "$ZIPFILE" "hide" "/data/adb/nohello"
+fi
+if [ ! -e "/data/adb/nohello/props.conf" ]; then
+  extract "$ZIPFILE" "props.conf" "/data/adb/nohello"
+fi
+# 出厂备份(供 WebUI 恢复默认): 模块目录内保留原始 hide/props.conf
+extract "$ZIPFILE" "hide" "$MODPATH"
+extract "$ZIPFILE" "props.conf" "$MODPATH"
+# KernelSU 模块 WebUI: webroot 必须位于模块根目录, 管理器自动设置权限/SELinux context
+ui_print "- Extracting webroot"
+unzip -o "$ZIPFILE" 'webroot/*' -d "$MODPATH/" >&2
 
 ui_print "- ${DESCRIPTION}"

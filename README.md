@@ -3,6 +3,9 @@
   A Zygisk module to hide root.
   </br>
   </br>
+  <a href="README_zh-CN.md">中文文档 (简体中文)</a>
+  </br>
+  </br>
   <a href="https://github.com/MhmRdd/NoHello/actions/workflows/build.yml">
     <img src="https://github.com/MhmRdd/Il2Dump/actions/workflows/build.yml/badge.svg?branch=master" alt="Android CI status">
   </a>
@@ -54,15 +57,15 @@ This can be solved if you make NoHello evaluates Mount Rule System per boot/comp
 
 ## Hide Rule System
 
-**Since version 0.0.7-fos**, NoHello introduces **Hide Rule System** to counter anti-cheat detections that probe *child paths* of well-known directories (e.g. `/sys/module/module_00`, `/data/local/tmp/.studio`, `/dev/pts/0`) for root frameworks, debuggers and cheat tooling.
+**Since version 0.0.8**, NoHello introduces **Hide Rule System** to counter anti-cheat detections that probe *child paths* of well-known directories (e.g. `/sys/module/module_00`, `/data/local/tmp/.studio`, `/dev/pts/0`) for root frameworks, debuggers and cheat tooling.
 
 For each configured path, NoHello covers the directory with an **empty tmpfs** inside the target app's mount namespace, so child-path probes fail (ENOENT for sysfs paths; EACCES for `/data/local/tmp` — same as a clean device) while the directory itself still resolves — avoiding "directory vanished" heuristics.
 
 > [!WARNING]
-> **Detection-surface tradeoff**: covering a directory with tmpfs adds non-standard mount entries to the app's `/proc/self/mounts` (e.g. `tmpfs /sys/module`), changes `st_dev` vs its parent, and makes the covered directory empty (a real device's `/sys/module` always has entries). In the observed TGPA/ACE runtime traces (access/stat child-path probing) this is a net win, but any anti-cheat that parses mountinfo or cross-checks `st_dev` will see the cover. This is the fundamental limitation of userland-only hiding (the reason susfs exists); test on the target game before relying on it.
+> **Detection-surface tradeoff**: covering a directory with tmpfs adds non-standard mount entries to the app's `/proc/self/mounts` (e.g. `tmpfs /sys/module`), changes `st_dev` vs its parent, and makes the covered directory empty (a real device's `/sys/module` always has entries). In observed anti-cheat runtime traces (access/stat child-path probing) this is a net win, but any anti-cheat that parses mountinfo or cross-checks `st_dev` will see the cover. This is the fundamental limitation of userland-only hiding (the reason susfs exists); test on the target app before relying on it.
 
 > [!IMPORTANT]
-> **Do NOT add `/dev/pts` to the hide file** — covering the devpts mount point breaks `openpty()`/pts allocation in apps. TGPA's PTY probe (`stat /dev/pts/0..9`) is best handled by keeping the environment free of active root shells on the target device.
+> **Do NOT add `/dev/pts` to the hide file** — covering the devpts mount point breaks `openpty()`/pts allocation in apps. PTY probes (`stat /dev/pts/0..9`) are best handled by keeping the environment free of active root shells on the target device.
 
 ### Default coverage (built-in)
 
@@ -88,7 +91,7 @@ Mounting is best-effort: if the `context=` mount fails, NoHello retries with a p
 
 ## Device Spoofing (property service)
 
-**Since version 0.0.7-fos**, NoHello can impersonate a donor device (e.g. a non-rooted Huawei phone) to anti-cheats that fingerprint the device.
+**Since version 0.0.8**, NoHello can impersonate a donor device (e.g. a non-rooted Huawei phone) to anti-cheats that fingerprint the device.
 
 ### How it works
 
@@ -101,7 +104,7 @@ A single channel driven by `props.conf`:
 The **editable** config lives at `/data/adb/nohello/props.conf` (managed by the WebUI); the module directory copy (`$MODDIR/props.conf`) is only the factory-default fallback read at boot. `service.sh` re-applies on every boot while `props_enabled` exists.
 
 > [!IMPORTANT]
-> Earlier designs also bind-mounted a spoofed build.prop / cpuinfo into the app's mount namespace. That approach was **dropped**: those mounts are visible in the app's `/proc/self/mounts` with `/data/adb/...` sources — exactly the fingerprint this module's own unmount logic treats as suspicious — and TGPA's observed traces never read build.prop files. Property-service spoofing via resetprop is the only channel.
+> Earlier designs also bind-mounted a spoofed build.prop / cpuinfo into the app's mount namespace. That approach was **dropped**: those mounts are visible in the app's `/proc/self/mounts` with `/data/adb/...` sources — exactly the fingerprint this module's own unmount logic treats as suspicious — and observed anti-cheat traces never read build.prop files. Property-service spoofing via resetprop is the only channel.
 
 ### What to spoof (and what NOT to)
 

@@ -332,6 +332,29 @@ static bool looksLikeValidContext(const std::string &ctx) {
     return ctx.rfind("u:object_r:", 0) == 0 && ctx.find(':') != std::string::npos;
 }
 
+// 白名单内容匹配:whitelist 文件每行一个包名,'#' 注释,空白容忍。
+// 白名单模式(文件存在)下只有匹配的 app 会被处理,避免 denylist 模式
+// 误伤 media provider / 常用 app(对它们 unshare 会切断 /storage/emulated
+// 的 FUSE 挂载视图,导致存储不可用)。
+static bool whitelistContains(const std::string &process) {
+	std::ifstream f("/data/adb/nohello/whitelist");
+	if (!f.is_open())
+		return false;
+	std::string line;
+	while (std::getline(f, line)) {
+		auto hash = line.find('#');
+		if (hash != std::string::npos)
+			line.erase(hash);
+		size_t start = line.find_first_not_of(" \t\r\n");
+		if (start == std::string::npos)
+			continue;
+		size_t end = line.find_last_not_of(" \t\r\n");
+		if (line.substr(start, end - start + 1) == process)
+			return true;
+	}
+	return false;
+}
+
 static std::vector<std::pair<std::string, std::string>> getHidePaths() {
     std::vector<std::pair<std::string, std::string>> paths = defaultHidePaths;
     std::ifstream f("/data/adb/nohello/hide");
@@ -447,6 +470,19 @@ private:
 
     void preSpecialize(AppSpecializeArgs *args) {
 		unsigned int flags = api->getFlags();
+		// 进程名(供 media-provider 硬排除与白名单匹配)
+		const char *process = args->nice_name ? env->GetStringUTFChars(args->nice_name, nullptr) : nullptr;
+		const std::string procName = process ? process : "";
+		if (process) env->ReleaseStringUTFChars(args->nice_name, process);
+		// ExternalStorageService 宿主 (com.android.providers.media.module) 承载
+		// 模拟存储 FUSE 会话:对它 unshare(CLONE_NEWNS) 会使其 mount ns 里的
+		// /storage/emulated 挂载缺失(挂载传播需要 unshare 后创建的挂载点目录),
+		// FuseDaemon stat /storage/emulated 失败 → sdcard 卷无法挂载。
+		// 它是系统存储服务而非反作弊目标,任何模式下都跳过。
+		if (procName == "com.android.providers.media.module") {
+			api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
+			return;
+		}
 		const bool whitelist = access("/data/adb/nohello/whitelist", F_OK) == 0;
 		const bool nodirtyro = access("/data/adb/nohello/no_dirtyro_ar", F_OK) == 0;
 		if (flags & zygisk::StateFlag::PROCESS_GRANTED_ROOT) {
@@ -463,7 +499,14 @@ private:
 				return devinobymap(lib);
 			}
 		};
-		if ((whitelist && isuserapp(args->uid)) || flags & zygisk::StateFlag::PROCESS_ON_DENYLIST) {
+		// 白名单模式(whitelist 文件存在):只处理文件中列出的包名,避免误伤
+		// media provider / 常用 app —— 对它们 unshare 会切断 /storage/emulated
+		// 的 FUSE 挂载视图,导致存储不可用。denylist 模式维持原行为。
+		const bool onDenylist = flags & zygisk::StateFlag::PROCESS_ON_DENYLIST;
+		const bool target = whitelist
+			? (isuserapp(args->uid) && !procName.empty() && whitelistContains(procName))
+			: onDenylist;
+		if (target) {
 			pid_t pid = getpid(), ppid = getppid();
 			cfd = api->connectCompanion(); // Companion FD
 			api->exemptFd(cfd);

@@ -21,41 +21,40 @@
 </p>
 
 > [!CAUTION]
-> **Known issue (2026-08-19 update): sdcard FUSE breakage on some devices — NOT specific to v0.0.8**
+> **Known issue (2026-08-19, FIXED): sdcard / app-storage breakage caused by mount-ns isolation**
 >
-> On at least one device (OnePlus PKX110, ColorOS / Android 16, KernelSU + ZygiskNext 521+, ~15 modules),
-> installing the module and rebooting breaks the emulated-storage (sdcard) FUSE daemon:
-> vold repeatedly fails to start it (`Failed to start FUSE`) and `/sdcard` becomes
-> inaccessible (`Transport endpoint is not connected`). Data in `/data/media/0` is **not**
-> lost; storage recovers fully after removing the module and rebooting.
+> Root cause (verified by A/B test on OnePlus PKX110, ColorOS / Android 16): unsharing
+> (CLONE_NEWNS) a target app's mount namespace cuts its view of the `/storage/emulated`
+> FUSE mounts. When `com.android.providers.media.module` — which hosts ExternalStorageService,
+> the sdcard FUSE session — was processed, FuseDaemon failed to start
+> (`failed to stat source /storage/emulated`) → `/sdcard` unusable, emulated volumes
+> `unmountable`, and every other unshared app lost storage access as well (camera / QQ
+> could not write). Data in `/data/media/0` is never at risk.
 >
-> **A/B test result (2026-08-19): the ORIGINAL unmodified upstream v0.0.7 (tag 4d53ecf) reproduces the
-> exact same failure on the same device.** The v0.0.8 branch changes (Hide Rule System /
-> device spoofing / WebUI / sepolicy rules) are therefore **exonerated** — the trigger is
-> shared upstream behavior interacting with this device environment, not the v0.0.8
-> additions. Root cause is still under investigation (scope narrowed to the common
-> unmount/remount + service.sh resetprop paths).
+> **Fix**: the `whitelist` file now takes package names (one per line, `#` comments) and
+> **only listed apps are processed**; `com.android.providers.media.module` is always
+> excluded regardless of mode. Prefer **whitelist mode** over deny-list mode — any
+> system-ish app in the deny list gets the same broken storage view.
 >
-> If you hit this: remove the module (`rm -rf /data/adb/modules/zygisk_nohello
-> /data/adb/nohello /data/adb/post-fs-data.d/.nohello_cleanup.sh`) and reboot — storage
-> recovers fully, data intact.
+> If you still hit storage issues: remove the module (`rm -rf /data/adb/modules/zygisk_nohello
+> /data/adb/nohello /data/adb/post-fs-data.d/.nohello_cleanup.sh`) and reboot.
 >
 > ---
-> **已知问题 (2026-08-19 更新): 部分设备上的 sdcard FUSE 故障 — 并非 v0.0.8 特有**
+> **已知问题（2026-08-19，已修复）：mount namespace 隔离导致的存储故障**
 >
-> 在至少一台设备（OnePlus PKX110，ColorOS / Android 16，KernelSU + ZygiskNext 521+，约 15 个模块）上，
-> 安装模块并重启后会破坏模拟存储 (sdcard) 的 FUSE 守护进程：vold 反复无法启动
-> sdcard FUSE daemon（`Failed to start FUSE`），`/sdcard` 不可访问
-> （`Transport endpoint is not connected`）。`/data/media/0` 中的数据**不会丢失**；
-> 移除模块并重启后存储完全恢复。
+> 根因（OnePlus PKX110 / ColorOS / Android 16 对照实验确认）：对目标 App 执行
+> `unshare(CLONE_NEWNS)` 会切断其 mount namespace 中 `/storage/emulated` 的 FUSE 挂载视图。
+> 当承载 ExternalStorageService（sdcard FUSE 会话）的 `com.android.providers.media.module`
+> 被处理时，FuseDaemon 无法启动（`failed to stat source /storage/emulated`）→ `/sdcard`
+> 不可用、emulated 卷 `unmountable`，且其他被隔离的 App（相机 / QQ 等）同样失去存储
+> 写入能力。`/data/media/0` 中的数据始终安全。
 >
-> **对照实验结果 (2026-08-19): 原版未修改的上游 v0.0.7（tag 4d53ecf）在同一台设备上复现完全相同的
-> 故障。** v0.0.8 分支的改动（Hide Rule System / 设备模拟 / WebUI / sepolicy 规则）
-> 因此**被排除** —— 触发源是上游共有行为与该设备环境的组合，而非 v0.0.8 新增内容。
-> 根因仍在调查（范围已缩小到共有的 unmount/remount 与 service.sh resetprop 路径）。
+> **修复**：`whitelist` 文件现在按行写包名（`#` 注释），**只处理列表中列出的 App**；
+> `com.android.providers.media.module` 在任何模式下都被排除。**推荐使用白名单模式**
+> 而非黑名单模式——黑名单中的任何系统类 App 都会遇到同样的存储视图断裂。
 >
-> 若遇到此问题：移除模块（`rm -rf /data/adb/modules/zygisk_nohello
-> /data/adb/nohello /data/adb/post-fs-data.d/.nohello_cleanup.sh`）并重启——存储完全恢复，数据完好。
+> 若仍遇到存储问题：移除模块（`rm -rf /data/adb/modules/zygisk_nohello
+> /data/adb/nohello /data/adb/post-fs-data.d/.nohello_cleanup.sh`）并重启。
 
 > [!NOTE]
 > This module currently focuses to hide root & zygisk from apps.
@@ -85,8 +84,17 @@ Using the **release** build is recommended over the debug build. Only use debug 
 4. Disable `Enforce DenyList` in ZygiskNext/ReZygisk settings if there is one. (if installed)
 5. Add the target app to the deny list unless you're using a Magisk fork with a white list instead.
 
-## Whitelisting (0.0.4+)
-You can set the working mode to **whitelist** (instead of the default **blacklist**) by creating an empty regular file `/data/adb/nohello/whitelist`.
+## Whitelisting (0.0.8+)
+Set the working mode to **whitelist** (instead of the default **blacklist**) by creating `/data/adb/nohello/whitelist` and listing package names, one per line (`#` for comments):
+
+```
+# only these apps are processed
+com.example.game1
+com.example.game2
+```
+
+Only listed apps receive root-hiding treatment. **This is the recommended mode**: the default deny-list mode isolates every deny-listed app's mount namespace, which breaks its `/storage/emulated` FUSE view (that is how this module previously broke sdcard / app storage — see the caution banner at the top). `com.android.providers.media.module` is always skipped regardless of mode.
+
 >[!WARNING]
 > Using **Mount Rule System** with **whitelist**, can cause severe overheating & performance issues, due to how MRS being evaluated each time a process spawns.
 

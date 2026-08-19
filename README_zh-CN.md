@@ -53,11 +53,19 @@
 4. 如安装了 ZygiskNext/ReZygisk，也关闭其 `Enforce DenyList`。
 5. 将目标 App 加入 deny list（除非你用的是白名单机制的 Magisk 分支）。
 
-## 白名单模式（0.0.4+）
+## 白名单模式（0.0.8+）
 
-创建空文件 `/data/adb/nohello/whitelist` 可切换为**白名单**工作模式（默认是黑名单）。
+创建 `/data/adb/nohello/whitelist` 并逐行写入包名（`#` 为注释）即可切换为**白名单**工作模式（默认是黑名单）：
 
->[!WARNING]
+```
+# 只处理这些 App
+com.example.game1
+com.example.game2
+```
+
+只有列表中列出的 App 会获得 root 隐藏处理。**这是推荐模式**：默认的黑名单模式会隔离每个黑名单 App 的 mount namespace，切断其 `/storage/emulated` 的 FUSE 视图——这正是本模块此前导致 sdcard / App 存储故障的原因（见顶部警告横幅）。`com.android.providers.media.module` 在任何模式下都会被跳过。
+
+> [!WARNING]
 > 白名单模式 + **Mount Rule System** 可能导致严重发热与性能问题——MRS 在每次进程创建时都会被评估。
 
 可通过创建空文件 `/data/adb/nohello/umount_persist`（或 `umount_persists`）让 NoHello 仅在每次开机/companion 实例中评估一次 Mount Rule System 来解决。

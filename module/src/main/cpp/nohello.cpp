@@ -243,12 +243,12 @@ static void doumount(const std::string& mntPnt) {
 
 static void remount(const std::vector<MountInfo>& mounts) {
 	for (const auto& mount : mounts) {
-				if (mount.getMountPoint() == "/data") {
+			if (mount.getMountPoint() == "/data") {
 			// Skip remount on device-mapper devices (metadata encryption).
 			// Reading a dm device superblock may return wrong error data,
 			// and remounting may interfere with the encryption layer.
 			const auto& mntSrc = mount.getMountSource();
-			if (mntSrc.find("dm-") != std::string::npos) {
+			if (mntSrc.find("/dev/block/dm-") != std::string::npos) {
 				LOGW("remount: skipping /data on dm device (%s)", mntSrc.c_str());
 				break;
 			}

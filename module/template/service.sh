@@ -17,8 +17,10 @@ contains_reset_prop() {
   [[ "$(resetprop "$NAME")" = *"$CONTAINS"* ]] && resetprop "$NAME" "$NEWVAL"
 }
 
-until [ "$(getprop sys.boot_completed)" = "1" ]; do
+BOOT_WAIT=0
+until [ "$(getprop sys.boot_completed)" = "1" ] || [ $BOOT_WAIT -ge 60 ]; do
   sleep 2
+  BOOT_WAIT=$((BOOT_WAIT + 1))
 done
 
 check_reset_prop "ro.boot.vbmeta.device_state" "locked"

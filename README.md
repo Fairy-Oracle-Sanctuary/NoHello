@@ -21,36 +21,41 @@
 </p>
 
 > [!CAUTION]
-> **⚠️ v0.0.8 已撤回 (2026-08-18) — 请勿安装 / 请立即卸载**
+> **Known issue (2026-08-19 update): sdcard FUSE breakage on some devices — NOT specific to v0.0.8**
 >
-> The v0.0.8 release (Hide Rule System / device spoofing / WebUI branch) was found to
-> **break the emulated-storage (sdcard) FUSE daemon** on at least one device: after
-> installing the module and rebooting, vold repeatedly fails to start the sdcard FUSE
-> daemon (`Failed to start FUSE`, exit 234) and `/sdcard` becomes inaccessible
-> (`Transport endpoint is not connected`). Underlying data in `/data/media/0` is **not**
-> lost, but the storage mount fails until the module is removed and the device rebooted.
+> On at least one device (OnePlus PKX110, ColorOS / Android 16, KernelSU + ZygiskNext 521+, ~15 modules),
+> installing the module and rebooting breaks the emulated-storage (sdcard) FUSE daemon:
+> vold repeatedly fails to start it (`Failed to start FUSE`) and `/sdcard` becomes
+> inaccessible (`Transport endpoint is not connected`). Data in `/data/media/0` is **not**
+> lost; storage recovers fully after removing the module and rebooting.
 >
-> The release and tag have been deleted. **Do not install v0.0.8.** If you already
-> installed it: remove the module (`rm -rf /data/adb/modules/zygisk_nohello
+> **A/B test result (2026-08-19): the ORIGINAL unmodified upstream v0.0.7 (tag 4d53ecf) reproduces the
+> exact same failure on the same device.** The v0.0.8 branch changes (Hide Rule System /
+> device spoofing / WebUI / sepolicy rules) are therefore **exonerated** — the trigger is
+> shared upstream behavior interacting with this device environment, not the v0.0.8
+> additions. Root cause is still under investigation (scope narrowed to the common
+> unmount/remount + service.sh resetprop paths).
+>
+> If you hit this: remove the module (`rm -rf /data/adb/modules/zygisk_nohello
 > /data/adb/nohello /data/adb/post-fs-data.d/.nohello_cleanup.sh`) and reboot — storage
 > recovers fully, data intact.
 >
-> Root cause is under investigation. The v0.0.7 upstream line remains unaffected.
->
 > ---
-> **v0.0.8 已撤回 (2026-08-18) — 请勿安装 / 请立即卸载**
+> **已知问题 (2026-08-19 更新): 部分设备上的 sdcard FUSE 故障 — 并非 v0.0.8 特有**
 >
-> v0.0.8 版本（Hide Rule System / 设备模拟 / WebUI 分支）被发现会在至少一台设备上
-> **破坏模拟存储 (sdcard) 的 FUSE 守护进程**：安装模块并重启后，vold 反复无法启动
-> sdcard FUSE daemon（`Failed to start FUSE`，exit 234），`/sdcard` 不可访问
-> （`Transport endpoint is not connected`）。底层数据在 `/data/media/0` 中**不会丢失**，
-> 但存储挂载会一直失败，直到移除模块并重启设备。
+> 在至少一台设备（OnePlus PKX110，ColorOS / Android 16，KernelSU + ZygiskNext 521+，约 15 个模块）上，
+> 安装模块并重启后会破坏模拟存储 (sdcard) 的 FUSE 守护进程：vold 反复无法启动
+> sdcard FUSE daemon（`Failed to start FUSE`），`/sdcard` 不可访问
+> （`Transport endpoint is not connected`）。`/data/media/0` 中的数据**不会丢失**；
+> 移除模块并重启后存储完全恢复。
 >
-> 该 release 与 tag 已删除。**请勿安装 v0.0.8。** 若已安装：移除模块
-> （`rm -rf /data/adb/modules/zygisk_nohello /data/adb/nohello
-> /data/adb/post-fs-data.d/.nohello_cleanup.sh`）并重启——存储会完全恢复，数据完好。
+> **对照实验结果 (2026-08-19): 原版未修改的上游 v0.0.7（tag 4d53ecf）在同一台设备上复现完全相同的
+> 故障。** v0.0.8 分支的改动（Hide Rule System / 设备模拟 / WebUI / sepolicy 规则）
+> 因此**被排除** —— 触发源是上游共有行为与该设备环境的组合，而非 v0.0.8 新增内容。
+> 根因仍在调查（范围已缩小到共有的 unmount/remount 与 service.sh resetprop 路径）。
 >
-> 根因调查中。上游 v0.0.7 不受影响。
+> 若遇到此问题：移除模块（`rm -rf /data/adb/modules/zygisk_nohello
+> /data/adb/nohello /data/adb/post-fs-data.d/.nohello_cleanup.sh`）并重启——存储完全恢复，数据完好。
 
 > [!NOTE]
 > This module currently focuses to hide root & zygisk from apps.
